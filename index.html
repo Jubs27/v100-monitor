@@ -2,88 +2,76 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>V100 Digits Monitor</title>
+<title>V100 Monitor Pro</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <style>
 body {
     margin: 0;
-    background: #0d1117;
+    background: #0b1220;
     font-family: Arial, sans-serif;
     color: white;
     text-align: center;
 }
 
 .header {
-    padding: 15px;
-    font-size: 20px;
+    padding: 20px;
+    font-size: 22px;
     font-weight: bold;
-}
-
-.status {
-    font-size: 14px;
-    color: #00ff88;
 }
 
 .digits {
     display: flex;
     justify-content: center;
-    flex-wrap: wrap;
     gap: 8px;
     margin: 20px;
 }
 
 .digit {
-    width: 55px;
-    height: 55px;
+    width: 45px;
+    height: 45px;
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 20px;
+    font-size: 18px;
     font-weight: bold;
-    transition: 0.2s;
 }
 
-.even { background: #2979ff; }
+.even { background: #2f80ff; }
 .odd { background: #ffc107; }
 
-.highlight {
-    border: 3px solid #00ffea;
-    transform: scale(1.15);
-}
-
-canvas {
-    max-width: 95%;
+.chart-wrapper {
+    width: 95%;
+    max-width: 1400px;
     margin: auto;
 }
 
-@media (max-width: 600px) {
-    .digit {
-        width: 45px;
-        height: 45px;
-        font-size: 16px;
-    }
+canvas {
+    width: 100% !important;
+    height: 450px !important;
 }
 </style>
 </head>
 
 <body>
 
-<div class="header">
-    Volatility 100 Index
-    <div class="status">LIVE</div>
-</div>
+<div class="header">Volatility 100 Index - LIVE</div>
 
 <div class="digits" id="digits"></div>
 
-<canvas id="chart"></canvas>
+<div class="chart-wrapper">
+    <canvas id="chart"></canvas>
+</div>
 
 <script>
-const app_id = "1089"; 
+
+const app_id = "1089";
 const ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${app_id}`);
 
-let digitsBuffer = [];
+let digits = [];
+let highlights = [];
+let totalTicks = 0;
 
 const ctx = document.getElementById('chart').getContext('2d');
 
@@ -93,33 +81,78 @@ const chart = new Chart(ctx, {
         labels: [],
         datasets: [{
             data: [],
-            borderColor: '#00f5ff',
+            borderColor: '#00e5ff',
             borderWidth: 2,
-            tension: 0.3,
+            tension: 0.4,
             pointRadius: 4,
-            pointBackgroundColor: '#ffffff'
+            pointBackgroundColor: "white"
         }]
     },
     options: {
         responsive: true,
+        maintainAspectRatio: false,
         animation: false,
-        plugins: { legend: { display: false } },
+        plugins: {
+            legend: { display: false }
+        },
         scales: {
+            x: {
+                grid: { display: false }
+            },
             y: {
                 min: 0,
                 max: 9,
-                ticks: { color: "white" },
-                grid: { color: "#222" }
-            },
-            x: {
-                ticks: { color: "white" },
-                grid: { color: "#222" }
+                ticks: {
+                    stepSize: 1,
+                    color: "#ffffff"
+                },
+                grid: {
+                    color: "rgba(255,255,255,0.1)"
+                }
             }
         }
-    }
+    },
+    plugins: [{
+        id: 'customNumbers',
+        afterDatasetsDraw(chart) {
+            const { ctx } = chart;
+            ctx.save();
+
+            chart.getDatasetMeta(0).data.forEach((point, index) => {
+
+                if (highlights[index]) {
+
+                    const value = digits[index];
+                    const x = point.x;
+                    const y = point.y;
+
+                    ctx.beginPath();
+                    ctx.arc(x, y, 14, 0, 2 * Math.PI);
+                    ctx.fillStyle = value % 2 === 0 ? "#2f80ff" : "#ffc107";
+                    ctx.fill();
+
+                    ctx.fillStyle = "#000";
+                    ctx.font = "bold 12px Arial";
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+                    ctx.fillText(value, x, y);
+                }
+            });
+
+            ctx.restore();
+        }
+    }]
 });
 
 ws.onopen = () => {
+
+    ws.send(JSON.stringify({
+        ticks_history: "R_100",
+        count: 100,
+        end: "latest",
+        style: "ticks"
+    }));
+
     ws.send(JSON.stringify({
         ticks: "R_100",
         subscribe: 1
@@ -127,13 +160,41 @@ ws.onopen = () => {
 };
 
 ws.onmessage = (msg) => {
-    const data = JSON.parse(msg.data);
-    if (data.tick) {
-        const price = data.tick.quote.toString();
-        const lastDigit = parseInt(price.slice(-1));
 
-        digitsBuffer.push(lastDigit);
-        if (digitsBuffer.length > 10) digitsBuffer.shift();
+    const data = JSON.parse(msg.data);
+
+    if (data.history) {
+        digits = data.history.prices.map(p =>
+            parseInt(p.toString().slice(-1))
+        );
+
+        highlights = new Array(digits.length).fill(false);
+        totalTicks = digits.length;
+
+        updateDigits();
+        updateChart();
+    }
+
+    if (data.tick) {
+
+        const lastDigit = parseInt(
+            data.tick.quote.toString().slice(-1)
+        );
+
+        totalTicks++;
+
+        digits.push(lastDigit);
+
+        if (totalTicks % 10 === 0) {
+            highlights.push(true);
+        } else {
+            highlights.push(false);
+        }
+
+        if (digits.length > 100) {
+            digits.shift();
+            highlights.shift();
+        }
 
         updateDigits();
         updateChart();
@@ -144,31 +205,23 @@ function updateDigits() {
     const container = document.getElementById("digits");
     container.innerHTML = "";
 
-    digitsBuffer.forEach((d, index) => {
+    digits.slice(-10).forEach(d => {
         const div = document.createElement("div");
         div.classList.add("digit");
         div.classList.add(d % 2 === 0 ? "even" : "odd");
-
-        if (index === digitsBuffer.length - 1) {
-            div.classList.add("highlight");
-        }
-
         div.innerText = d;
         container.appendChild(div);
     });
 }
 
 function updateChart() {
-    chart.data.labels = digitsBuffer.map((_, i) => i + 1);
-    chart.data.datasets[0].data = digitsBuffer;
 
-    chart.data.datasets[0].pointRadius =
-        digitsBuffer.map((_, i) =>
-            i === digitsBuffer.length - 1 ? 8 : 4
-        );
+    chart.data.labels = digits.map((_, i) => i + 1);
+    chart.data.datasets[0].data = digits;
 
     chart.update();
 }
+
 </script>
 
 </body>
